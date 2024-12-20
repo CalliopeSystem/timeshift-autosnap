@@ -1,6 +1,7 @@
 #!/bin/bash
 #author: gobonja
 #Modified by Matti Hyttinen
+#Modified by Claire Stroebel
 
 [ $(findmnt / -no fstype) == "overlay" ] && { echo "==> skipping timeshift-autosnap because system is booted in Live CD mode..."; exit 0; }
 [[ -v SKIP_AUTOSNAP ]] && { echo "==> skipping timeshift-autosnap due SKIP_AUTOSNAP environment variable being set."; exit 0; }
@@ -37,13 +38,28 @@ if $(get_property "skipRsyncAutosnap" "boolean" "false") && ! [ $(findmnt / -no 
     echo "==> skipping timeshift-autosnap due skipRsyncAutosnap in $CONF_FILE set to TRUE." >&2; exit 0;
 fi
 
-readonly SNAPSHOT_DESCRIPTION=$(get_property "snapshotDescription" "string" "{timeshift-autosnap} {created before upgrade}")
+if $(get_property "snapshotBoot" "boolean" "true") ; then
+    echo "Rsyncing /boot into the filesystem before the call to timeshift." >&2;
+    mkdir -p /boot.backup
+    cmd="rsync -au --exclude 'efi' --delete /boot/ /boot.backup/"
+    eval $cmd
+fi
+
+if $(get_property "snapshotEFI" "boolean" "true") ; then
+    echo "Rsyncing /boot/efi into the filesystem before the call to timeshift." >&2;
+    mkdir -p /boot.backup
+    mkdir -p /boot.backup/efi
+    cmd="rsync -au --delete /boot/efi/ /boot.backup/efi/"
+    eval $cmd
+fi
+
+readonly SNAPSHOT_DESCRIPTION="{timeshift-autosnap} {$(echo $(ps -o command --no-headers -p $PPID) | head -c200)}"
 
 timeshift --create --comments "$SNAPSHOT_DESCRIPTION" || { echo "Unable to run timeshift-autosnap! Please close Timeshift and try again. Script will now exit..." >&2; exit 1; }
 
 if $(get_property "deleteSnapshots" "boolean" "true") ; then
     timeshift --list > $SNAPSHOTS_TO_DELETE
-    sed -ni "/$SNAPSHOT_DESCRIPTION/p" $SNAPSHOTS_TO_DELETE
+    sed -ni "/{timeshift-autosnap}/p" $SNAPSHOTS_TO_DELETE
     sed -ni "s/.*\($SNAPSHOT_NAME_DATE_PATTERN\).*/\1/p" $SNAPSHOTS_TO_DELETE
 
     count=$(($(sed -n '$=' $SNAPSHOTS_TO_DELETE)-$(get_property "maxSnapshots" "integer" "3")))
@@ -55,10 +71,6 @@ if $(get_property "deleteSnapshots" "boolean" "true") ; then
             timeshift --delete --snapshot $snapshot
         done
     fi
-fi;
-
-if $(get_property "updateGrub" "boolean" "true") && [ "$(pacman -Qs ^grub-btrfs$)" ]; then
-    grub-mkconfig -o /boot/grub/grub.cfg
 fi;
 
 exit 0
